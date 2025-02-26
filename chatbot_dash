@@ -1,227 +1,206 @@
 import dash
-from dash import html, dcc, Input, Output, State, callback_context
 import dash_bootstrap_components as dbc
+from dash import dcc, html, Input, Output, State
 import base64
-import json
-import time
-from datetime import datetime
+import io
 
-# Initialize the Dash app
+# Create Dash app
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
-# Create the layout
-app.layout = html.Div([
-    html.H1("Chatbot with Copy-Paste Support", className="mb-4"),
-    html.P("Paste text and/or images directly into the box below.", className="mb-3"),
-    
-    # Chat history container
-    html.Div(id="chat-history", className="mb-4", style={
-        "maxHeight": "500px",
-        "overflowY": "auto",
-        "border": "1px solid #ddd",
-        "borderRadius": "5px",
-        "padding": "10px"
-    }),
-    
-    # Paste container with custom JavaScript
-    html.Div([
-        # Hidden div to store the pasted image data
-        html.Div(id="pasted-image-store", style={"display": "none"}),
-        
-        # Paste area
-        dcc.Textarea(
-            id="paste-area",
-            placeholder="Click here and press Ctrl+V to paste text or images",
+# 1) Store conversation in dcc.Store
+#    Each message is a dict: {"role": "user" or "llm", "type": "text" or "image", "content": "..."}
+app.layout = dbc.Container(
+    fluid=True,
+    children=[
+        html.H2("My LLM Chatbot", className="text-center mt-4"),
+
+        # Hidden store to keep track of chat messages
+        dcc.Store(id="chat-store", data=[]),
+
+        # =====================
+        # Chat History Display
+        # =====================
+        html.Div(
+            id="chat-history",
             style={
-                "width": "100%",
-                "height": "150px",
-                "border": "2px dashed #aaa",
-                "borderRadius": "5px",
-                "padding": "10px"
+                "border": "1px solid #ccc",
+                "padding": "10px",
+                "height": "400px",
+                "overflowY": "auto",
+                "marginBottom": "20px",
             },
-            className="mb-2"
         ),
-        
-        # Preview area for pasted image
-        html.Div(id="image-preview", className="mb-3"),
-        
-        # Send button
-        dbc.Button("Send", id="send-button", color="primary", className="mr-2"),
-        
-        # Clear button
-        dbc.Button("Clear Conversation", id="clear-button", color="secondary")
-    ]),
-    
-    # Custom JavaScript for handling paste events
-    html.Script("""
-        window.addEventListener('DOMContentLoaded', (event) => {
-            const pasteArea = document.getElementById('paste-area');
-            
-            pasteArea.addEventListener('paste', function(e) {
-                // Handle text paste normally
-                
-                // Check for images in the clipboard
-                const items = e.clipboardData.items;
-                for (let i = 0; i < items.length; i++) {
-                    if (items[i].type.indexOf('image') !== -1) {
-                        const blob = items[i].getAsFile();
-                        const reader = new FileReader();
-                        
-                        reader.onload = function(event) {
-                            // Store the image data in the hidden div
-                            document.getElementById('pasted-image-store').setAttribute(
-                                'data-image', event.target.result
-                            );
-                            
-                            // Trigger a custom event that Dash can listen for
-                            document.getElementById('pasted-image-store').dispatchEvent(
-                                new CustomEvent('image-pasted', {bubbles: true})
-                            );
-                        };
-                        
-                        reader.readAsDataURL(blob);
-                    }
-                }
-            });
-        });
-    """)
-])
 
-# Store for chat messages
-chat_messages = []
-current_image = None
+        # ==============================
+        # Clipboard (Text + Image Area)
+        # ==============================
+        dbc.Row(
+            [
+                dbc.Col(
+                    [
+                        # Text input
+                        dbc.Textarea(
+                            id="user-text",
+                            placeholder="Type your message...",
+                            style={"resize": "none"},
+                            rows=3,
+                        ),
+                        dbc.Button("Send Text", id="send-text-btn", color="primary", className="mt-2")
+                    ],
+                    width=6,
+                ),
+                dbc.Col(
+                    [
+                        # Image upload
+                        dcc.Upload(
+                            id="upload-image",
+                            children=html.Div(
+                                [
+                                    "Drag and Drop or ",
+                                    html.A("Click to Upload an Image"),
+                                ],
+                                style={
+                                    "borderWidth": "1px",
+                                    "borderStyle": "dashed",
+                                    "borderRadius": "5px",
+                                    "textAlign": "center",
+                                    "padding": "20px",
+                                },
+                            ),
+                            multiple=False,  # Single image at a time
+                        ),
+                    ],
+                    width=6,
+                ),
+            ],
+            className="mb-4",
+        ),
+    ],
+)
 
-# Callback for handling pasted images
+
+# =================
+#  CALLBACKS
+# =================
+
+# Callback: When user sends text
 @app.callback(
-    Output("image-preview", "children"),
-    Input("pasted-image-store", "data-image"),
+    Output("chat-store", "data"),
+    Input("send-text-btn", "n_clicks"),
+    State("user-text", "value"),
+    State("chat-store", "data"),
     prevent_initial_call=True
 )
-def update_image_preview(image_data):
-    global current_image
-    if image_data:
-        current_image = image_data
-        return html.Div([
-            html.Img(src=image_data, style={"maxWidth": "250px", "maxHeight": "200px"}),
-            html.Button("✕", id="remove-image", className="btn btn-sm btn-danger", 
-                       style={"position": "absolute", "top": "5px", "right": "5px"})
-        ], style={"position": "relative", "display": "inline-block"})
-    return []
+def handle_user_text(n_clicks, user_text, chat_data):
+    """
+    Appends user text to chat store, then LLM response.
+    """
+    if not user_text:
+        return chat_data
 
-# Callback for sending messages
+    # 1) Add user message
+    chat_data.append({"role": "user", "type": "text", "content": user_text})
+
+    # 2) Get LLM response (dummy function for demonstration)
+    llm_response = generate_response(user_text)
+
+    # 3) Add LLM message
+    chat_data.append({"role": "llm", "type": "text", "content": llm_response})
+
+    return chat_data
+
+
+# Callback: When user uploads an image
+@app.callback(
+    Output("chat-store", "data"),
+    Input("upload-image", "contents"),
+    State("upload-image", "filename"),
+    State("chat-store", "data"),
+    prevent_initial_call=True
+)
+def handle_image_upload(image_contents, filename, chat_data):
+    """
+    Appends user image to chat store, then calls LLM with a placeholder response.
+    """
+    if not image_contents:
+        return chat_data
+
+    # 1) Add user image to chat
+    chat_data.append({"role": "user", "type": "image", "content": image_contents})
+
+    # You might want to feed the image to an LLM or a Vision model.
+    # For now, we'll have a placeholder text response:
+    llm_response = "I see you uploaded an image. [Placeholder LLM Response]"
+    chat_data.append({"role": "llm", "type": "text", "content": llm_response})
+
+    return chat_data
+
+
+# Callback: Render chat history
 @app.callback(
     Output("chat-history", "children"),
-    Output("paste-area", "value"),
-    Output("pasted-image-store", "data-image"),
-    Input("send-button", "n_clicks"),
-    Input("remove-image", "n_clicks"),
-    Input("clear-button", "n_clicks"),
-    State("paste-area", "value"),
-    State("pasted-image-store", "data-image"),
-    prevent_initial_call=True
+    Input("chat-store", "data")
 )
-def handle_interaction(send_clicks, remove_clicks, clear_clicks, text_input, image_data):
-    global chat_messages, current_image
-    
-    # Check which button was clicked
-    trigger = callback_context.triggered[0]["prop_id"].split(".")[0]
-    
-    if trigger == "clear-button":
-        # Clear chat history
-        chat_messages = []
-        current_image = None
-        return [], "", None
-    
-    elif trigger == "remove-image":
-        # Remove the current image
-        current_image = None
-        return render_chat_history(), text_input, None
-    
-    elif trigger == "send-button" and (text_input or current_image):
-        # Add user message to chat
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        user_message = {
-            "role": "user",
-            "content": text_input or "",
-            "image": current_image,
-            "time": timestamp
-        }
-        chat_messages.append(user_message)
-        
-        # Simulate bot response
-        time.sleep(0.5)  # Simulate thinking
-        
-        # Generate bot response
-        if current_image and text_input:
-            bot_response = f"I received your message and image. Your message was: '{text_input}'"
-        elif current_image:
-            bot_response = "I received your image! What would you like to do with it?"
-        else:
-            bot_response = f"I received your message: '{text_input}'"
-        
-        bot_timestamp = datetime.now().strftime("%H:%M:%S")
-        chat_messages.append({
-            "role": "bot",
-            "content": bot_response,
-            "time": bot_timestamp
-        })
-        
-        # Clear inputs
-        current_image = None
-        return render_chat_history(), "", None
-    
-    # Default case - no changes
-    return render_chat_history(), text_input, image_data
+def render_chat_history(chat_data):
+    """
+    Renders the conversation in the chat history div.
+    We'll use icons to represent user vs. LLM.
+    """
+    chat_elements = []
 
-def render_chat_history():
-    """Render the chat history as Dash components"""
-    chat_components = []
-    
-    for msg in chat_messages:
+    for msg in chat_data:
+        # Determine styling and icon
         if msg["role"] == "user":
-            # Create user message bubble
-            message_content = [
-                html.Div([
-                    html.Span("You", style={"fontWeight": "bold"}),
-                    html.Span(f" ({msg['time']})", style={"fontSize": "0.8em", "color": "#888"})
-                ]),
-                html.Div(msg["content"])
-            ]
-            
-            # Add image if present
-            if "image" in msg and msg["image"]:
-                message_content.append(
-                    html.Img(src=msg["image"], style={"maxWidth": "250px", "marginTop": "8px"})
-                )
-            
-            chat_components.append(
-                html.Div(message_content, className="chat-message user", style={
-                    "backgroundColor": "#e6f7ff",
-                    "borderLeft": "5px solid #1890ff",
-                    "padding": "10px",
-                    "borderRadius": "5px",
-                    "marginBottom": "10px"
-                })
-            )
+            # Example using Bootstrap Icons (bi-person-circle)
+            # This requires that you have included the bootstrap icons link or inline usage
+            icon = html.I(className="bi bi-person-circle me-2", style={"fontSize": "1.2em"})
+            alignment = "right"  # user on the right
+            text_color = "primary"
         else:
-            # Create bot message bubble
-            chat_components.append(
-                html.Div([
-                    html.Div([
-                        html.Span("Bot", style={"fontWeight": "bold"}),
-                        html.Span(f" ({msg['time']})", style={"fontSize": "0.8em", "color": "#888"})
-                    ]),
-                    html.Div(msg["content"])
-                ], className="chat-message bot", style={
-                    "backgroundColor": "#f6f6f6",
-                    "borderLeft": "5px solid #888888",
-                    "padding": "10px",
-                    "borderRadius": "5px",
-                    "marginBottom": "10px"
-                })
-            )
-    
-    return chat_components
+            # LLM (bot) icon
+            icon = html.I(className="bi bi-robot me-2", style={"fontSize": "1.2em"})
+            alignment = "left"
+            text_color = "success"
 
+        # Build each message row
+        if msg["type"] == "text":
+            # text message
+            chat_elements.append(
+                html.Div(
+                    [
+                        icon,
+                        html.Span(msg["content"]),
+                    ],
+                    style={"textAlign": alignment, "margin": "10px 0", "color": text_color},
+                )
+            )
+        elif msg["type"] == "image":
+            # image message (Base64-encoded)
+            # If "image_contents" is in data:url format from dcc.Upload, we can directly display it in <img>:
+            chat_elements.append(
+                html.Div(
+                    [
+                        icon,
+                        html.Img(src=msg["content"], style={"maxWidth": "300px", "display": "block"}),
+                    ],
+                    style={"textAlign": alignment, "margin": "10px 0"},
+                )
+            )
+
+    return chat_elements
+
+
+# ===============
+# Helper function
+# ===============
+def generate_response(user_text):
+    """
+    Placeholder LLM response generator.
+    Replace with actual calls to OpenAI / HuggingFace / etc.
+    """
+    return f"Echo: You said '{user_text}'"
+
+
+# Run the app
 if __name__ == "__main__":
     app.run_server(debug=True)
