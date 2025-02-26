@@ -1,206 +1,101 @@
 import dash
 import dash_bootstrap_components as dbc
-from dash import dcc, html, Input, Output, State
-import base64
-import io
+from dash import dcc, html, Input, Output, State, clientside_callback
 
-# Create Dash app
+# A simple placeholder LLM response function
+def generate_response(user_combined_html):
+    """
+    Replace this with real logic (OpenAI, HuggingFace, etc.).
+    For demo, just echo that we received HTML content.
+    """
+    return "LLM response: I received your text and/or images."
+
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
-# 1) Store conversation in dcc.Store
-#    Each message is a dict: {"role": "user" or "llm", "type": "text" or "image", "content": "..."}
-app.layout = dbc.Container(
-    fluid=True,
-    children=[
-        html.H2("My LLM Chatbot", className="text-center mt-4"),
+# Inject a custom <script> to handle clipboard image paste
+# and convert it to base64 <img src="data:..."> right away.
+# We also define a small helper function `insertImageAtCursor`.
+app.index_string = """
+<!DOCTYPE html>
+<html>
+<head>
+    {%metas%}
+    <title>Single-Area Clipboard Chat</title>
+    {%favicon%}
+    {%css%}
+    <!-- Bootstrap Icons (for user & bot icons) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+</head>
+<body>
+    {%app_entry%}
+    <footer>
+        {%config%}
+        {%scripts%}
+        {%renderer%}
+    </footer>
 
-        # Hidden store to keep track of chat messages
-        dcc.Store(id="chat-store", data=[]),
+    <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      const editableDiv = document.getElementById("clipboard-div");
+      if(!editableDiv) return;
 
-        # =====================
-        # Chat History Display
-        # =====================
-        html.Div(
-            id="chat-history",
-            style={
-                "border": "1px solid #ccc",
-                "padding": "10px",
-                "height": "400px",
-                "overflowY": "auto",
-                "marginBottom": "20px",
-            },
-        ),
+      editableDiv.addEventListener("paste", function(e) {
+        const items = e.clipboardData?.items || [];
+        let handled = false;
+        for (let i = 0; i < items.length; i++) {
+          let item = items[i];
+          // If this is an image, prevent default paste and insert as base64 <img>
+          if (item.type.indexOf("image") !== -1) {
+            e.preventDefault();
+            handled = true;
+            let file = item.getAsFile();
+            let reader = new FileReader();
+            reader.onload = function(evt) {
+              insertImageAtCursor(editableDiv, evt.target.result);
+            }
+            reader.readAsDataURL(file);
+          }
+        }
+        // If we didn't find an image, normal paste of text will occur automatically.
+        // Alternatively, you could do advanced text processing here.
+      });
 
-        # ==============================
-        # Clipboard (Text + Image Area)
-        # ==============================
-        dbc.Row(
-            [
-                dbc.Col(
-                    [
-                        # Text input
-                        dbc.Textarea(
-                            id="user-text",
-                            placeholder="Type your message...",
-                            style={"resize": "none"},
-                            rows=3,
-                        ),
-                        dbc.Button("Send Text", id="send-text-btn", color="primary", className="mt-2")
-                    ],
-                    width=6,
-                ),
-                dbc.Col(
-                    [
-                        # Image upload
-                        dcc.Upload(
-                            id="upload-image",
-                            children=html.Div(
-                                [
-                                    "Drag and Drop or ",
-                                    html.A("Click to Upload an Image"),
-                                ],
-                                style={
-                                    "borderWidth": "1px",
-                                    "borderStyle": "dashed",
-                                    "borderRadius": "5px",
-                                    "textAlign": "center",
-                                    "padding": "20px",
-                                },
-                            ),
-                            multiple=False,  # Single image at a time
-                        ),
-                    ],
-                    width=6,
-                ),
-            ],
-            className="mb-4",
-        ),
-    ],
-)
+      function insertImageAtCursor(container, base64Image) {
+        let selection = window.getSelection();
+        if (!selection.rangeCount) return;
+        let range = selection.getRangeAt(0);
 
+        let img = document.createElement("img");
+        img.src = base64Image;
+        img.style.maxWidth = "150px";   // example style
+        img.style.display = "block";    // or inline, up to you
+        img.style.margin = "5px 0";
 
-# =================
-#  CALLBACKS
-# =================
+        range.insertNode(img);
+        range.collapse(false);
 
-# Callback: When user sends text
-@app.callback(
-    Output("chat-store", "data"),
-    Input("send-text-btn", "n_clicks"),
-    State("user-text", "value"),
-    State("chat-store", "data"),
-    prevent_initial_call=True
-)
-def handle_user_text(n_clicks, user_text, chat_data):
-    """
-    Appends user text to chat store, then LLM response.
-    """
-    if not user_text:
-        return chat_data
+        // Move the cursor after the inserted image
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+    });
+    </script>
+</body>
+</html>
+"""
 
-    # 1) Add user message
-    chat_data.append({"role": "user", "type": "text", "content": user_text})
+app.layout = dbc.Container(fluid=True, children=[
+    html.H3("Single Clipboard Area for Text and Images", className="text-center mt-3"),
 
-    # 2) Get LLM response (dummy function for demonstration)
-    llm_response = generate_response(user_text)
+    dcc.Store(id="chat-store", data=[]),
+    dcc.Store(id="clipboard-store"),  # Will hold the user’s pasted HTML temporarily
 
-    # 3) Add LLM message
-    chat_data.append({"role": "llm", "type": "text", "content": llm_response})
-
-    return chat_data
-
-
-# Callback: When user uploads an image
-@app.callback(
-    Output("chat-store", "data"),
-    Input("upload-image", "contents"),
-    State("upload-image", "filename"),
-    State("chat-store", "data"),
-    prevent_initial_call=True
-)
-def handle_image_upload(image_contents, filename, chat_data):
-    """
-    Appends user image to chat store, then calls LLM with a placeholder response.
-    """
-    if not image_contents:
-        return chat_data
-
-    # 1) Add user image to chat
-    chat_data.append({"role": "user", "type": "image", "content": image_contents})
-
-    # You might want to feed the image to an LLM or a Vision model.
-    # For now, we'll have a placeholder text response:
-    llm_response = "I see you uploaded an image. [Placeholder LLM Response]"
-    chat_data.append({"role": "llm", "type": "text", "content": llm_response})
-
-    return chat_data
-
-
-# Callback: Render chat history
-@app.callback(
-    Output("chat-history", "children"),
-    Input("chat-store", "data")
-)
-def render_chat_history(chat_data):
-    """
-    Renders the conversation in the chat history div.
-    We'll use icons to represent user vs. LLM.
-    """
-    chat_elements = []
-
-    for msg in chat_data:
-        # Determine styling and icon
-        if msg["role"] == "user":
-            # Example using Bootstrap Icons (bi-person-circle)
-            # This requires that you have included the bootstrap icons link or inline usage
-            icon = html.I(className="bi bi-person-circle me-2", style={"fontSize": "1.2em"})
-            alignment = "right"  # user on the right
-            text_color = "primary"
-        else:
-            # LLM (bot) icon
-            icon = html.I(className="bi bi-robot me-2", style={"fontSize": "1.2em"})
-            alignment = "left"
-            text_color = "success"
-
-        # Build each message row
-        if msg["type"] == "text":
-            # text message
-            chat_elements.append(
-                html.Div(
-                    [
-                        icon,
-                        html.Span(msg["content"]),
-                    ],
-                    style={"textAlign": alignment, "margin": "10px 0", "color": text_color},
-                )
-            )
-        elif msg["type"] == "image":
-            # image message (Base64-encoded)
-            # If "image_contents" is in data:url format from dcc.Upload, we can directly display it in <img>:
-            chat_elements.append(
-                html.Div(
-                    [
-                        icon,
-                        html.Img(src=msg["content"], style={"maxWidth": "300px", "display": "block"}),
-                    ],
-                    style={"textAlign": alignment, "margin": "10px 0"},
-                )
-            )
-
-    return chat_elements
-
-
-# ===============
-# Helper function
-# ===============
-def generate_response(user_text):
-    """
-    Placeholder LLM response generator.
-    Replace with actual calls to OpenAI / HuggingFace / etc.
-    """
-    return f"Echo: You said '{user_text}'"
-
-
-# Run the app
-if __name__ == "__main__":
-    app.run_server(debug=True)
+    # ========================
+    # Chat History
+    # ========================
+    html.Div(
+        id="chat-history",
+        style={
+            "border": "1px solid #ccc",
+            "padding": "10px",
+    
