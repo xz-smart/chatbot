@@ -98,4 +98,150 @@ app.layout = dbc.Container(fluid=True, children=[
         style={
             "border": "1px solid #ccc",
             "padding": "10px",
-    
+            "height": "300px",
+            "overflowY": "auto",
+            "marginBottom": "20px",
+        }
+    ),
+
+    # ========================
+    # Single Clipboard Area
+    # ========================
+    html.Div(
+        id="clipboard-div",
+        contentEditable=True,
+        style={
+            "border": "1px solid #666",
+            "minHeight": "80px",
+            "padding": "5px",
+            "marginBottom": "10px",
+            "borderRadius": "4px",
+            "overflowY": "auto",
+        },
+        **{"aria-label": "Paste text or images here."}
+    ),
+
+    dbc.Button("Send", id="send-button", color="primary", className="mb-3"),
+])
+
+
+# ------------------------------------------------------------------------------
+# 1) CLIENTSIDE CALLBACK to read .innerHTML from the contentEditable Div
+# ------------------------------------------------------------------------------
+clientside_callback(
+    """
+    function(n_clicks) {
+      // If no click, no update
+      if (!n_clicks) {
+        return window.dash_clientside.no_update;
+      }
+      // Grab the content of #clipboard-div
+      const div = document.getElementById("clipboard-div");
+      if (!div) {
+        return "";
+      }
+      // Return its HTML (includes <img> tags for pasted images)
+      return div.innerHTML;
+    }
+    """,
+    Output("clipboard-store", "data"),
+    Input("send-button", "n_clicks"),
+    prevent_initial_call=True
+)
+
+
+# ------------------------------------------------------------------------------
+# 2) SERVER CALLBACK to move the user's single message (HTML) into chat history
+# ------------------------------------------------------------------------------
+@app.callback(
+    Output("chat-store", "data"),
+    Input("clipboard-store", "data"),
+    State("chat-store", "data"),
+    prevent_initial_call=True
+)
+def handle_user_message(user_html, chat_data):
+    """
+    When the user hits 'Send', we get the entire HTML from the contentEditable Div.
+    1. Append user message (HTML) to chat store
+    2. Generate LLM response
+    3. Append LLM response
+    4. Clear the contentEditable Div? We'll do that clientside in a second step if desired.
+    """
+    if not user_html:
+        return chat_data
+
+    # Append user message
+    chat_data.append({"role": "user", "html": user_html})
+
+    # LLM response (dummy)
+    llm_text = generate_response(user_html)
+    chat_data.append({"role": "llm", "html": llm_text})
+
+    return chat_data
+
+
+# ------------------------------------------------------------------------------
+# 3) RENDER CHAT HISTORY
+# ------------------------------------------------------------------------------
+@app.callback(
+    Output("chat-history", "children"),
+    Input("chat-store", "data"),
+)
+def render_chat_history(chat_data):
+    """
+    Display each message with an icon + the raw HTML or text from user/LLM.
+    - For user messages, we display the entire HTML they pasted
+    - For LLM, it might just be text or HTML
+    """
+    elements = []
+    for msg in chat_data:
+        if msg["role"] == "user":
+            icon = html.I(className="bi bi-person-circle me-2", style={"fontSize": "1.2em"})
+            style = {"textAlign": "right", "color": "#007bff", "margin": "10px 0"}
+        else:
+            icon = html.I(className="bi bi-robot me-2", style={"fontSize": "1.2em"})
+            style = {"textAlign": "left", "color": "green", "margin": "10px 0"}
+
+        # We display the user’s HTML (which may contain text + images) or the LLM’s text
+        elements.append(
+            html.Div([
+                icon,
+                # Dangerously set the innerHTML for the user’s content
+                # This will render any pasted images or formatting.
+                html.Div(
+                    dangerously_allow_html=True,
+                    children=msg["html"]
+                )
+            ], style=style)
+        )
+
+    return elements
+
+
+# ------------------------------------------------------------------------------
+# (OPTIONAL) CLEAR THE CLIPBOARD DIV AFTER SENDING
+# ------------------------------------------------------------------------------
+# A simple clientside callback to set #clipboard-div.innerHTML = "" after submission
+clientside_callback(
+    """
+    function(user_html) {
+        // This callback is triggered whenever user_html changes (the text we just sent).
+        // Clear the contentEditable div so the user can type again.
+        const div = document.getElementById("clipboard-div");
+        if (div) {
+            div.innerHTML = "";
+        }
+        return null; // No actual output
+    }
+    """,
+    Output("clipboard-div", "children"),
+    Input("clipboard-store", "data"),
+    prevent_initial_call=True
+)
+
+
+# ------------------------------------------------------------------------------
+# LAUNCH
+# ------------------------------------------------------------------------------
+if __name__ == "__main__":
+    app.run_server(debug=True)
