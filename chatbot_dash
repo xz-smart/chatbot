@@ -1,247 +1,104 @@
 import dash
 import dash_bootstrap_components as dbc
-from dash import dcc, html, Input, Output, State, clientside_callback
-
-# A simple placeholder LLM response function
-def generate_response(user_combined_html):
-    """
-    Replace this with real logic (OpenAI, HuggingFace, etc.).
-    For demo, just echo that we received HTML content.
-    """
-    return "LLM response: I received your text and/or images."
+from dash import html, dcc, Input, Output, State
+from dash_quill import DashQuill
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
-# Inject a custom <script> to handle clipboard image paste
-# and convert it to base64 <img src="data:..."> right away.
-# We also define a small helper function `insertImageAtCursor`.
-app.index_string = """
-<!DOCTYPE html>
-<html>
-<head>
-    {%metas%}
-    <title>Single-Area Clipboard Chat</title>
-    {%favicon%}
-    {%css%}
-    <!-- Bootstrap Icons (for user & bot icons) -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
-</head>
-<body>
-    {%app_entry%}
-    <footer>
-        {%config%}
-        {%scripts%}
-        {%renderer%}
-    </footer>
+app.layout = dbc.Container([
+    html.H2("Chatbot with dash_quill", className="text-center my-4"),
 
-    <script>
-    document.addEventListener("DOMContentLoaded", function() {
-      const editableDiv = document.getElementById("clipboard-div");
-      if(!editableDiv) return;
-
-      editableDiv.addEventListener("paste", function(e) {
-        const items = e.clipboardData?.items || [];
-        let handled = false;
-        for (let i = 0; i < items.length; i++) {
-          let item = items[i];
-          // If this is an image, prevent default paste and insert as base64 <img>
-          if (item.type.indexOf("image") !== -1) {
-            e.preventDefault();
-            handled = true;
-            let file = item.getAsFile();
-            let reader = new FileReader();
-            reader.onload = function(evt) {
-              insertImageAtCursor(editableDiv, evt.target.result);
-            }
-            reader.readAsDataURL(file);
-          }
-        }
-        // If we didn't find an image, normal paste of text will occur automatically.
-        // Alternatively, you could do advanced text processing here.
-      });
-
-      function insertImageAtCursor(container, base64Image) {
-        let selection = window.getSelection();
-        if (!selection.rangeCount) return;
-        let range = selection.getRangeAt(0);
-
-        let img = document.createElement("img");
-        img.src = base64Image;
-        img.style.maxWidth = "150px";   // example style
-        img.style.display = "block";    // or inline, up to you
-        img.style.margin = "5px 0";
-
-        range.insertNode(img);
-        range.collapse(false);
-
-        // Move the cursor after the inserted image
-        selection.removeAllRanges();
-        selection.addRange(range);
-      }
-    });
-    </script>
-</body>
-</html>
-"""
-
-app.layout = dbc.Container(fluid=True, children=[
-    html.H3("Single Clipboard Area for Text and Images", className="text-center mt-3"),
-
+    # Store the conversation
     dcc.Store(id="chat-store", data=[]),
-    dcc.Store(id="clipboard-store"),  # Will hold the user’s pasted HTML temporarily
 
-    # ========================
-    # Chat History
-    # ========================
+    # Display conversation above the editor
     html.Div(
         id="chat-history",
         style={
             "border": "1px solid #ccc",
-            "padding": "10px",
             "height": "300px",
             "overflowY": "auto",
-            "marginBottom": "20px",
+            "padding": "10px",
+            "marginBottom": "20px"
         }
     ),
 
-    # ========================
-    # Single Clipboard Area
-    # ========================
-    html.Div(
-        id="clipboard-div",
-        contentEditable=True,
-        style={
-            "border": "1px solid #666",
-            "minHeight": "80px",
-            "padding": "5px",
-            "marginBottom": "10px",
-            "borderRadius": "4px",
-            "overflowY": "auto",
-        },
-        **{"aria-label": "Paste text or images here."}
+    # Quill editor for text + images
+    DashQuill(
+        id="quill-editor",
+        value="",  # initial content
+        style={"minHeight": "150px"}
+        # By default, Quill will let you paste images as base64
+        # If you want to ensure the toolbar has an 'Image' button or advanced modules, see below
     ),
 
-    dbc.Button("Send", id="send-button", color="primary", className="mb-3"),
-])
+    dbc.Button("Send", id="send-btn", color="primary", className="mt-2"),
+], fluid=True)
 
 
-# ------------------------------------------------------------------------------
-# 1) CLIENTSIDE CALLBACK to read .innerHTML from the contentEditable Div
-# ------------------------------------------------------------------------------
-clientside_callback(
-    """
-    function(n_clicks) {
-      // If no click, no update
-      if (!n_clicks) {
-        return window.dash_clientside.no_update;
-      }
-      // Grab the content of #clipboard-div
-      const div = document.getElementById("clipboard-div");
-      if (!div) {
-        return "";
-      }
-      // Return its HTML (includes <img> tags for pasted images)
-      return div.innerHTML;
-    }
-    """,
-    Output("clipboard-store", "data"),
-    Input("send-button", "n_clicks"),
-    prevent_initial_call=True
-)
-
-
-# ------------------------------------------------------------------------------
-# 2) SERVER CALLBACK to move the user's single message (HTML) into chat history
-# ------------------------------------------------------------------------------
 @app.callback(
     Output("chat-store", "data"),
-    Input("clipboard-store", "data"),
+    Input("send-btn", "n_clicks"),
+    State("quill-editor", "value"),
     State("chat-store", "data"),
     prevent_initial_call=True
 )
-def handle_user_message(user_html, chat_data):
+def on_send_click(n_clicks, quill_value, chat_data):
     """
-    When the user hits 'Send', we get the entire HTML from the contentEditable Div.
-    1. Append user message (HTML) to chat store
-    2. Generate LLM response
-    3. Append LLM response
-    4. Clear the contentEditable Div? We'll do that clientside in a second step if desired.
+    When user clicks Send, quill_value contains the user's combined text+images in Quill's HTML or Delta format.
+    We'll treat it as a single user message, then append a bot response.
     """
-    if not user_html:
-        return chat_data
+    if not quill_value:
+        return chat_data  # no update if empty
 
-    # Append user message
-    chat_data.append({"role": "user", "html": user_html})
+    # 1) Append user's message
+    chat_data.append({"role": "user", "content": quill_value})
 
-    # LLM response (dummy)
-    llm_text = generate_response(user_html)
-    chat_data.append({"role": "llm", "html": llm_text})
+    # 2) Generate an LLM/bot response (placeholder)
+    bot_reply = fake_llm_response(quill_value)
+    chat_data.append({"role": "bot", "content": bot_reply})
 
     return chat_data
 
 
-# ------------------------------------------------------------------------------
-# 3) RENDER CHAT HISTORY
-# ------------------------------------------------------------------------------
 @app.callback(
     Output("chat-history", "children"),
-    Input("chat-store", "data"),
+    Input("chat-store", "data")
 )
-def render_chat_history(chat_data):
+def render_chat(chat_data):
     """
-    Display each message with an icon + the raw HTML or text from user/LLM.
-    - For user messages, we display the entire HTML they pasted
-    - For LLM, it might just be text or HTML
+    Renders the conversation. Each message is stored in 'content' which can be Quill HTML or Delta.
+    dash_quill outputs HTML by default, so we can display it using dangerously_allow_html.
     """
-    elements = []
+    messages = []
     for msg in chat_data:
         if msg["role"] == "user":
             icon = html.I(className="bi bi-person-circle me-2", style={"fontSize": "1.2em"})
-            style = {"textAlign": "right", "color": "#007bff", "margin": "10px 0"}
+            style = {"textAlign": "right", "color": "#0d6efd", "marginBottom": "10px"}
         else:
             icon = html.I(className="bi bi-robot me-2", style={"fontSize": "1.2em"})
-            style = {"textAlign": "left", "color": "green", "margin": "10px 0"}
+            style = {"textAlign": "left", "color": "green", "marginBottom": "10px"}
 
-        # We display the user’s HTML (which may contain text + images) or the LLM’s text
-        elements.append(
+        # Display the Quill HTML
+        messages.append(
             html.Div([
                 icon,
-                # Dangerously set the innerHTML for the user’s content
-                # This will render any pasted images or formatting.
                 html.Div(
                     dangerously_allow_html=True,
-                    children=msg["html"]
+                    children=msg["content"]
                 )
             ], style=style)
         )
+    return messages
 
-    return elements
 
-
-# ------------------------------------------------------------------------------
-# (OPTIONAL) CLEAR THE CLIPBOARD DIV AFTER SENDING
-# ------------------------------------------------------------------------------
-# A simple clientside callback to set #clipboard-div.innerHTML = "" after submission
-clientside_callback(
+def fake_llm_response(user_html):
     """
-    function(user_html) {
-        // This callback is triggered whenever user_html changes (the text we just sent).
-        // Clear the contentEditable div so the user can type again.
-        const div = document.getElementById("clipboard-div");
-        if (div) {
-            div.innerHTML = "";
-        }
-        return null; // No actual output
-    }
-    """,
-    Output("clipboard-div", "children"),
-    Input("clipboard-store", "data"),
-    prevent_initial_call=True
-)
+    Placeholder function. In a real app, replace with calls to
+    OpenAI / Hugging Face or your own model logic.
+    """
+    return "<p><em>Bot Reply:</em> I see you wrote some text and/or pasted an image!</p>"
 
 
-# ------------------------------------------------------------------------------
-# LAUNCH
-# ------------------------------------------------------------------------------
 if __name__ == "__main__":
     app.run_server(debug=True)
