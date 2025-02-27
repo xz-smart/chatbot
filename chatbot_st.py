@@ -1,101 +1,104 @@
 import streamlit as st
-from PIL import Image
-import io
 import time
+import openai
 
-# Set page configuration
-st.set_page_config(page_title="Chatbot with Image Support", layout="wide")
+# (Optional) If using OpenAI, set your API key:
+# openai.api_key = "YOUR_API_KEY"
 
-# Initialize chat history in session state if it doesn't exist
+# 1) Set page config (optional), e.g. wide layout
+st.set_page_config(layout="wide")
+
+# 2) Create a container at the top to display chat messages
+chat_container = st.container()
+
+# 3) Inject custom CSS to pin an input bar at the bottom
+st.markdown(
+    """
+    <style>
+    /* A container fixed at bottom, spanning full width */
+    #fixed-input-container {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        padding: 10px 0px 10px 0px;
+        margin: 0;
+        background-color: white;
+        border-top: 1px solid #ccc;
+        z-index: 9999;  /* ensure it's on top */
+    }
+    /* Make Streamlit main content area avoid overlapping the fixed container */
+    /* This "padding-bottom" should match or exceed the container's height */
+    .main .block-container {
+        padding-bottom: 120px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# 4) We’ll keep track of conversation in session_state if you like
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Add custom CSS for better styling
-st.markdown("""
-<style>
-.chat-message {
-    padding: 1rem;
-    border-radius: 0.5rem;
-    margin-bottom: 1rem;
-    display: flex;
-    flex-direction: column;
-}
-.chat-message.user {
-    background-color: #e6f7ff;
-    border-left: 5px solid #1890ff;
-}
-.chat-message.bot {
-    background-color: #f6f6f6;
-    border-left: 5px solid #888888;
-}
-.chat-message img {
-    max-width: 250px;
-    border-radius: 0.3rem;
-    margin-top: 0.5rem;
-}
-</style>
-""", unsafe_allow_html=True)
+# 5) Define a function to simulate or call an actual LLM in streaming mode
+def generate_llm_response_stream(prompt):
+    """
+    Example: yields partial output chunks for streaming.
+    Replace with your real LLM streaming logic (OpenAI, etc.).
+    """
+    # Fake streaming: just break prompt into chunks
+    # In a real scenario, you'd do something like:
+    #   response = openai.Completion.create(..., stream=True)
+    #   for chunk in response:
+    #       yield chunk.choices[0].text
+    for i in range(len(prompt)):
+        time.sleep(0.02)  # simulate delay
+        yield prompt[i]
 
-# Display chat header
-st.title("📱 Chatbot with Text & Image Support")
-st.markdown("Type a message and/or upload an image to chat with the bot.")
-
-# Display chat messages from history
-for message in st.session_state.messages:
-    with st.container():
-        if message["role"] == "user":
-            st.markdown(f"<div class='chat-message user'><strong>You:</strong> {message['content']}</div>", unsafe_allow_html=True)
-            if "image" in message:
-                st.image(message["image"], width=250)
+# 6) Display all messages so far (above the fixed input)
+with chat_container:
+    for msg in st.session_state.messages:
+        if msg["role"] == "user":
+            st.markdown(f"**You:** {msg['content']}")
         else:
-            st.markdown(f"<div class='chat-message bot'><strong>Bot:</strong> {message['content']}</div>", unsafe_allow_html=True)
+            st.markdown(f"**Assistant:** {msg['content']}")
 
-# Chat input area
-with st.container():
-    col1, col2 = st.columns([5, 1])
-    
-    # Text input
-    with col1:
-        user_input = st.text_area("Your message:", key="input", height=100)
-    
-    # Image upload
-    with col2:
-        uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
-    
-    # Send button
-    if st.button("Send"):
-        if user_input or uploaded_file:
-            # Add user message to chat history
-            user_message = {"role": "user", "content": user_input if user_input else ""}
-            
-            # Process uploaded image if any
-            if uploaded_file is not None:
-                image = Image.open(uploaded_file)
-                # Convert to bytes for storage in session state
-                img_byte_arr = io.BytesIO()
-                image.save(img_byte_arr, format=image.format if image.format else 'PNG')
-                user_message["image"] = img_byte_arr.getvalue()
-            
-            st.session_state.messages.append(user_message)
-            
-            # Simulate bot processing
-            with st.spinner("Bot is thinking..."):
-                time.sleep(1)  # Simulating processing time
-            
-            # Add bot response to chat history
-            if uploaded_file and user_input:
-                bot_response = f"I received your message and image. Your message was: '{user_input}'"
-            elif uploaded_file:
-                bot_response = "I received your image! What would you like to do with it?"
-            else:
-                bot_response = f"I received your message: '{user_input}'"
-            
-            st.session_state.messages.append({"role": "bot", "content": bot_response})
-            
-            # Rerun to update chat display
-            st.experimental_rerun()
+# 7) Create a placeholder for the LLM's *streaming* response
+#    We'll fill this as we receive partial text
+stream_placeholder = chat_container.empty()
 
-# Add a button to clear chat history
-if st.button("Clear Conversation"):
+# 8) Now define the fixed input UI via custom HTML container
+st.markdown("<div id='fixed-input-container'>", unsafe_allow_html=True)
+col1, col2, col3 = st.columns([6, 1, 1])  # Adjust ratio as needed
+
+with col1:
+    user_input = st.text_input("Enter your prompt", "", label_visibility="collapsed")
+with col2:
+    send_clicked = st.button("Send", type="primary")
+with col3:
+    clear_clicked = st.button("Clear")
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+# 9) Handle button logic
+if send_clicked and user_input.strip():
+    # a) Add user message to chat history
+    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    # b) "Stream" LLM response
+    partial_response = ""
+    for token in generate_llm_response_stream(f"Echo: {user_input}"):
+        partial_response += token
+        # Update the placeholder *live*
+        stream_placeholder.markdown(f"**Assistant:** {partial_response}")
+
+    # c) Append final LLM response to the chat
+    st.session_state.messages.append({"role": "assistant", "content": partial_response})
+
+    # d) Re-run the app so that messages appear in the normal chat layout
+    st.experimental_rerun()
+
+if clear_clicked:
     st.session_state.messages = []
     st.experimental_rerun()
