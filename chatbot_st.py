@@ -102,3 +102,16 @@ if send_clicked and user_input.strip():
 if clear_clicked:
     st.session_state.messages = []
     st.experimental_rerun()
+
+st.markdown(
+    """
+    <div style="height: 200px; overflow-y: auto; border: 1px solid #ccc; padding: 10px;" id="fixed-container">
+    """,
+    unsafe_allow_html=True
+)
+
+# Now place the empty placeholder inside that container
+placeholder = st.empty()
+
+# Close the fixed container div
+st.markdown("</div>", unsafe_allow_html=True)
