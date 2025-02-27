@@ -115,3 +115,109 @@ placeholder = st.empty()
 
 # Close the fixed container div
 st.markdown("</div>", unsafe_allow_html=True)
+import streamlit as st
+from html import escape
+
+st.set_page_config(layout="wide")
+
+st.title("Professional Chatbot UI Demo")
+
+# ------------------------------------------------------------------------------
+# 1) Inject custom CSS for chat container & message bubbles
+# ------------------------------------------------------------------------------
+st.markdown(
+    """
+    <style>
+    /* The overall chat container: fixed height, scrollable, nice background */
+    #chat-container {
+        height: 400px;
+        overflow-y: auto;
+        background-color: #f9f9f9;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        padding: 10px;
+        margin-bottom: 20px; 
+    }
+
+    /* Common bubble styling: margin, padding, border-radius, etc. */
+    .chat-bubble {
+        max-width: 60%;
+        padding: 10px 15px;
+        margin-bottom: 10px;
+        border-radius: 15px;
+        font-family: sans-serif;
+        line-height: 1.4;
+    }
+
+    /* User message bubble: align right, different color */
+    .chat-bubble-user {
+        background-color: #0084ff;
+        color: white;
+        margin-left: auto;  /* push it to the right */
+    }
+
+    /* Assistant message bubble: align left, different color */
+    .chat-bubble-assistant {
+        background-color: #e4e6eb;
+        color: black;
+        margin-right: auto; /* push it to the left */
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# ------------------------------------------------------------------------------
+# 2) Use session_state to store the conversation
+# ------------------------------------------------------------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []  # list of dicts: {"role": "user"/"assistant", "content": "..."}
+
+# ------------------------------------------------------------------------------
+# 3) Show the chat container with current messages
+#    We'll use st.markdown with HTML to display each message as a bubble.
+# ------------------------------------------------------------------------------
+# Opening the container div
+st.markdown('<div id="chat-container">', unsafe_allow_html=True)
+
+# Render each message in a bubble
+for msg in st.session_state.messages:
+    # Decide which bubble class to use
+    if msg["role"] == "user":
+        bubble_class = "chat-bubble chat-bubble-user"
+    else:
+        bubble_class = "chat-bubble chat-bubble-assistant"
+
+    # Escape HTML special chars in content to avoid injection
+    content = escape(msg["content"])
+
+    # Build the bubble HTML
+    bubble_html = f"""
+    <div class="{bubble_class}">
+        {content}
+    </div>
+    """
+    st.markdown(bubble_html, unsafe_allow_html=True)
+
+# Close the container div
+st.markdown("</div>", unsafe_allow_html=True)
+
+# ------------------------------------------------------------------------------
+# 4) Input area for new user messages (like a chat input)
+# ------------------------------------------------------------------------------
+user_text = st.text_input("Your message", label_visibility="collapsed")
+
+# A button to send the new message
+if st.button("Send", type="primary"):
+    if user_text.strip():
+        # Append the new user message
+        st.session_state.messages.append({"role": "user", "content": user_text.strip()})
+
+        # Here you'd call your LLM. For demo, we just echo a placeholder.
+        # LLM response:
+        assistant_reply = f"I see you said: {user_text}"
+        st.session_state.messages.append({"role": "assistant", "content": assistant_reply})
+        
+        # Rerun to refresh the chat display
+        st.experimental_rerun()
+
